@@ -30,7 +30,7 @@ jobs:
 
   coverage:
     name: Coverage
-    needs: [test]
+    needs: [lint]
     runs-on: ubuntu-latest
     services:
       postgres:
