@@ -12,6 +12,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from graphene_django import DjangoObjectType
 from graphene_django.filter import DjangoFilterConnectionField
+from graphene.utils.str_converters import to_snake_case
 
 from .conf import settings
 from .filter_arguments_factory import FilterArgumentsFactory
@@ -110,6 +111,26 @@ class AdvancedDjangoFilterConnectionField(DjangoFilterConnectionField):
         qs = super(DjangoFilterConnectionField, cls).resolve_queryset(
             connection, iterable, info, args,
         )
+
+        order = args.get("orderBy", None)
+        if order:
+            if isinstance(order, str):
+                snake_order = to_snake_case(order)
+            else:
+                snake_order = [to_snake_case(o) for o in order]
+
+            # annotate counts for ordering
+            for order_arg in snake_order:
+                order_arg = order_arg.lstrip("-")
+                annotation_name = f"annotate_{order_arg}"
+                annotation_method = getattr(qs, annotation_name, None)
+                if annotation_method:
+                    qs = annotation_method()
+
+            # override the default distinct parameters
+            # as they might differ from the order_by params
+            qs = qs.order_by(*snake_order).distinct()
+
         filter_arg = args.get(settings.FILTER_KEY, {})
         filterset = filterset_class(
             data=tree_input_type_to_data(filterset_class, filter_arg),
