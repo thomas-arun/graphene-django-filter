@@ -7,6 +7,8 @@ module instead of the `DjangoFilterConnectionField` from graphene-django.
 import warnings
 from typing import Any, Callable, Dict, Iterable, Optional, Type, Union
 
+from django.db.models.functions import TruncDate
+
 import graphene
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -118,6 +120,12 @@ class AdvancedDjangoFilterConnectionField(DjangoFilterConnectionField):
                 snake_order = to_snake_case(order)
             else:
                 snake_order = [to_snake_case(o) for o in order]
+
+            # If `created_date` is requested, annotate a date-only truncation of
+            # `created_on` so can be sort by day without timestamp.
+            has_created_date = any(f.lstrip("-") == "created_date" for f in snake_order)
+            if has_created_date:
+                qs = qs.annotate(created_date=TruncDate("created_on"))
 
             # annotate counts for ordering
             for order_arg in snake_order:
