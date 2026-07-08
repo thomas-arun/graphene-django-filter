@@ -7,6 +7,8 @@ module instead of the `DjangoFilterConnectionField` from graphene-django.
 import warnings
 from typing import Any, Callable, Dict, Iterable, Optional, Type, Union
 
+from django.db.models.functions import Lower,TruncDate
+
 import graphene
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -119,6 +121,12 @@ class AdvancedDjangoFilterConnectionField(DjangoFilterConnectionField):
             else:
                 snake_order = [to_snake_case(o) for o in order]
 
+            # If `created_date` is requested, annotate a date-only truncation of
+            # `created_on` so it can be sorted by day without the timestamp.
+            has_created_date = any(f.lstrip("-") == "created_date" for f in snake_order)
+            if has_created_date:
+                qs = qs.annotate(created_date=TruncDate("created_on"))
+
             # annotate counts for ordering
             for order_arg in snake_order:
                 order_arg = order_arg.lstrip("-")
@@ -137,6 +145,24 @@ class AdvancedDjangoFilterConnectionField(DjangoFilterConnectionField):
             queryset=qs,
             request=info.context,
         )
-        if filterset.form.is_valid():
-            return filterset.qs
-        raise ValidationError(filterset.form.errors.as_json())
+        if not filterset.form.is_valid():
+            raise ValidationError(filterset.form.errors.as_json())
+
+        result = filterset.qs
+
+        # case-insensitive ordering for any `__name` fields after the filterset runs
+        if order:
+            name_fields = [f for f in snake_order if f.lstrip("-").endswith("__name")]
+            if name_fields:
+                final_order = []
+                for field in snake_order:
+                    bare = field.lstrip("-")
+                    if bare.endswith("__name"):
+                        annotation_key = "lower_" + bare.replace("__", "_")
+                        result = result.annotate(**{annotation_key: Lower(bare)})
+                        final_order.append(f"-{annotation_key}" if field.startswith("-") else annotation_key)
+                    else:
+                        final_order.append(field)
+                result = result.order_by(*final_order)
+
+        return result
