@@ -496,3 +496,10 @@ class QuerySetNoneTests(TestCase):
         self.assertEqual(['Lighting'], self.filter_task_names({
             'not': {'user_full_name': 'Ann Lee'},
         }))
+
+    def test_annotation_next_to_not(self) -> None:
+        """Test that an annotation made outside `not` survives the `not` branch."""
+        self.assertEqual(['Comp'], self.filter_task_names({
+            'user_full_name': 'Ann Lee',
+            'not': {'name': 'FX'},
+        }))

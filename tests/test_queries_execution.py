@@ -236,6 +236,28 @@ class FullTextSearchTests(QueriesExecutionTests):
     """
     search_rank_fields_query = search_rank_query % 'tasksFields'
     search_rank_filterset_query = search_rank_query % 'tasksFilterset'
+    search_rank_with_not_query = """
+        {
+            %s(
+                filter: {
+                    searchRank: {
+                        vector: {fields: ["name"]}
+                        query: {value: "Important task №"}
+                        lookups: {gte: 0.08}
+                    }
+                    not: {name: {exact: "Important task №1"}}
+                }
+            ) {
+                edges {
+                    node {
+                        id
+                    }
+                }
+            }
+        }
+    """
+    search_rank_with_not_fields_query = search_rank_with_not_query % 'tasksFields'
+    search_rank_with_not_filterset_query = search_rank_with_not_query % 'tasksFilterset'
     trigram_query = """
         {
             %s(
@@ -282,6 +304,23 @@ class FullTextSearchTests(QueriesExecutionTests):
         expected = list(range(31, 76))
         self.assert_query_execution(expected, self.search_rank_fields_query, 'tasksFields')
         self.assert_query_execution(expected, self.search_rank_filterset_query, 'tasksFilterset')
+
+    def test_search_rank_with_not_execution(self) -> None:
+        """Test the schema execution by a search rank next to `not`.
+
+        The search rank annotation must survive the `not` branch.
+        """
+        expected = list(range(32, 76))
+        self.assert_query_execution(
+            expected,
+            self.search_rank_with_not_fields_query,
+            'tasksFields',
+        )
+        self.assert_query_execution(
+            expected,
+            self.search_rank_with_not_filterset_query,
+            'tasksFilterset',
+        )
 
     def test_trigram_execution(self) -> None:
         """Test the schema execution by a trigram."""

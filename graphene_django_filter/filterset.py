@@ -210,7 +210,7 @@ class AdvancedFilterSet(BaseFilterSet, metaclass=FilterSetMetaclass):
             qs, new_q = self.get_queryset_proxy_for_form(qs, or_form)
             or_q = or_q | new_q
         if form.not_form:
-            qs, new_q = self.get_queryset_proxy_for_form(queryset, form.not_form)
+            qs, new_q = self.get_queryset_proxy_for_form(qs, form.not_form)
             not_q = ~new_q
         else:
             not_q = models.Q()
