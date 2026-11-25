@@ -26,7 +26,7 @@ class QuerySetProxy(ObjectProxy):
     but such objects do not provide the ability to apply the negation operator to the entire object.
     Therefore, it is convenient to work with the Q object instead of the QuerySet.
     This class replaces the original QuerySet object,
-    and creates a Q object when calling the `filter` and `exclude` methods.
+    and creates a Q object when calling the `filter`, `exclude` and `none` methods.
     """
 
     __slots__ = 'q'
@@ -36,11 +36,9 @@ class QuerySetProxy(ObjectProxy):
         self.q = q or models.Q()
 
     def __getattr__(self, name: str) -> Any:
-        """Return QuerySet attributes for all cases except `filter` and `exclude`."""
-        if name == 'filter':
-            return self.filter_
-        elif name == 'exclude':
-            return self.exclude_
+        """Return QuerySet attributes for all cases except `filter`, `exclude` and `none`."""
+        if name in ('filter', 'exclude', 'none'):
+            return getattr(self, f'{name}_')
         attr = super().__getattr__(name)
         if callable(attr):
             def func(*args, **kwargs) -> Any:
@@ -72,6 +70,15 @@ class QuerySetProxy(ObjectProxy):
             q = models.Q(*args, **kwargs)
         self.q = self.q & ~q
         return self
+
+    def none_(self) -> 'QuerySetProxy':
+        """Replace the `none` method of the QuerySet class.
+
+        Calling `none` on the wrapped QuerySet would empty the QuerySet shared by all branches
+        and leave the Q object unchanged, so `or` and `not` would combine it as "no condition".
+        Recording "no rows" as a Q object makes it combine correctly with `and`, `or` and `not`.
+        """
+        return self.filter_(pk__in=[])
 
 
 def is_full_text_search_lookup_expr(lookup_expr: str) -> bool:

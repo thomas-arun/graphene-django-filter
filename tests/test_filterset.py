@@ -7,6 +7,8 @@ from typing import List
 from unittest.mock import MagicMock, patch
 
 from django.db import models
+from django.db.models.functions import Concat
+from django.db.models.query import EmptyQuerySet
 from django.test import TestCase
 from django.utils.timezone import make_aware
 from django_filters import CharFilter
@@ -46,6 +48,14 @@ class UtilsTests(TestCase):
             queryset_proxy.q,
         )
         self.assertEqual([queryset_proxy.__wrapped__, queryset_proxy.q], list(queryset_proxy))
+
+    def test_queryset_proxy_none(self) -> None:
+        """Test that `QuerySetProxy.none` is recorded as a Q object that matches no rows."""
+        queryset_proxy = QuerySetProxy(User.objects.all()).filter(first_name='John')
+        none_proxy = queryset_proxy.none()
+        self.assertIsInstance(none_proxy, QuerySetProxy)
+        self.assertEqual(models.Q(first_name='John') & models.Q(pk__in=[]), none_proxy.q)
+        self.assertNotIsInstance(none_proxy.__wrapped__, EmptyQuerySet)
 
     def test_is_full_text_search_lookup(self) -> None:
         """Test the `is_full_text_search_lookup` function."""
@@ -378,3 +388,111 @@ class AdvancedFilterSetTests(TestCase):
             *self.expected_trigram_filters,
         ]
         self.assertFiltersEqual(expected_filters, filters.items())
+
+
+class QuerySetNoneTests(TestCase):
+    """Tests for method filters that return `queryset.none()` inside `and`, `or` and `not`."""
+
+    class NoneTaskFilter(AdvancedFilterSet):
+        """Task FilterSet with method filters that call `none` and `annotate`."""
+
+        user_email = CharFilter(method='filter_user_email')
+        user_full_name = CharFilter(method='filter_user_full_name')
+
+        class Meta:
+            model = Task
+            fields = {'name': ('exact',)}
+
+        def filter_user_email(
+            self,
+            queryset: models.QuerySet,
+            name: str,
+            value: str,
+        ) -> models.QuerySet:
+            """Filter by the user's email, returning no rows if there is no such user."""
+            user = User.objects.filter(email=value).first()
+            if user is None:
+                return queryset.none()
+            return queryset.filter(user=user)
+
+        def filter_user_full_name(
+            self,
+            queryset: models.QuerySet,
+            name: str,
+            value: str,
+        ) -> models.QuerySet:
+            """Filter on an annotation built from the user's first and last name."""
+            return queryset.annotate(
+                user_full_name=Concat('user__first_name', models.Value(' '), 'user__last_name'),
+            ).filter(user_full_name=value)
+
+    missing_email = 'missing@example.com'
+
+    @classmethod
+    def setUpTestData(cls) -> None:
+        """Create two users with three tasks between them."""
+        ann = User.objects.create(email='ann@example.com', first_name='Ann', last_name='Lee')
+        bob = User.objects.create(email='bob@example.com', first_name='Bob', last_name='Brown')
+        # `created_at` is set explicitly because django-seed (see `generate_data`)
+        # switches `auto_now_add` off for the rest of the test run.
+        created_at = make_aware(datetime(2024, 1, 1))
+        Task.objects.create(name='FX', description='', user=ann, created_at=created_at)
+        Task.objects.create(name='Comp', description='', user=ann, created_at=created_at)
+        Task.objects.create(name='Lighting', description='', user=bob, created_at=created_at)
+
+    def filter_task_names(self, data: dict) -> List[str]:
+        """Return the sorted names of the tasks that match the filter data."""
+        filterset = self.NoneTaskFilter(data=data, queryset=Task.objects.all())
+        return sorted(filterset.qs.values_list('name', flat=True))
+
+    def test_none_at_top_level(self) -> None:
+        """Test that `none` at the top level returns no rows without querying tasks."""
+        filterset = self.NoneTaskFilter(
+            data={'user_email': self.missing_email},
+            queryset=Task.objects.all(),
+        )
+        tasks = filterset.qs
+        with self.assertNumQueries(0):
+            self.assertEqual([], list(tasks))
+
+    def test_none_in_and(self) -> None:
+        """Test that `none` inside `and` returns no rows."""
+        self.assertEqual([], self.filter_task_names({
+            'and': [{'user_email': self.missing_email}, {'name': 'FX'}],
+        }))
+
+    def test_none_in_or(self) -> None:
+        """Test that `none` inside `or` returns exactly the rows of the other branches."""
+        self.assertEqual(['FX'], self.filter_task_names({
+            'or': [{'user_email': self.missing_email}, {'name': 'FX'}],
+        }))
+
+    def test_none_in_every_or_branch(self) -> None:
+        """Test that `none` in every `or` branch returns no rows."""
+        self.assertEqual([], self.filter_task_names({
+            'or': [{'user_email': self.missing_email}, {'user_email': 'other@example.com'}],
+        }))
+
+    def test_none_in_not(self) -> None:
+        """Test that `none` inside `not` returns every row."""
+        self.assertEqual(['Comp', 'FX', 'Lighting'], self.filter_task_names({
+            'not': {'user_email': self.missing_email},
+        }))
+
+    def test_annotation_in_or(self) -> None:
+        """Test that an annotation made inside `or` reaches the final query."""
+        self.assertEqual(['FX', 'Lighting'], self.filter_task_names({
+            'or': [{'user_full_name': 'Bob Brown'}, {'name': 'FX'}],
+        }))
+
+    def test_annotation_and_none_in_or(self) -> None:
+        """Test that `none` inside `or` keeps the annotation made by another branch."""
+        self.assertEqual(['Lighting'], self.filter_task_names({
+            'or': [{'user_full_name': 'Bob Brown'}, {'user_email': self.missing_email}],
+        }))
+
+    def test_annotation_in_not(self) -> None:
+        """Test that an annotation made inside `not` reaches the final query."""
+        self.assertEqual(['Lighting'], self.filter_task_names({
+            'not': {'user_full_name': 'Ann Lee'},
+        }))
